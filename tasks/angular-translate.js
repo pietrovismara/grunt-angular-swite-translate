@@ -29,19 +29,32 @@ module.exports = function (grunt) {
       dest = this.data.dest || '.',
       jsonSrc = _file.expand(this.data.jsonSrc || []),
       jsonSrcName = _.union(this.data.jsonSrcName || [], ['label']),
+      defaultLang = this.data.defaultLang || '.',
       interpolation = this.data.interpolation || {startDelimiter: '{{', endDelimiter: '}}'},
       source = this.data.source || '',
-      defaultLang = this.data.defaultLang || '.',
       nullEmpty = this.data.nullEmpty || false,
       namespace = this.data.namespace || false,
       prefix = this.data.prefix || '',
       safeMode = this.data.safeMode ? true : false,
-      suffix = this.data.suffix,
-      customRegex = _.isArray(this.data.customRegex) || _.isObject(this.data.customRegex) ? this.data.customRegex : [],
+      suffix = this.data.suffix || '.json',
+      customRegex = _.isArray(this.data.customRegex) ? this.data.customRegex : [],
       stringify_options = this.data.stringifyOptions || null,
-      results = {},
-      keyAsText = this.data.keyAsText || false,
-      adapter = this.data.adapter || 'json';
+      results = {};
+
+    var customStringify = function (val) {
+      if (stringify_options) {
+        return stringify(val, _.isObject(stringify_options) ? stringify_options : {
+          space: '    ',
+          cmp: function (a, b) {
+            var lower = function (a) {
+              return a.toLowerCase();
+            };
+            return lower(a.key) < lower(b.key) ? -1 : 1;
+          }
+        });
+      }
+      return JSON.stringify(val, null, 4);
+    };
 
     // Use to escape some char into regex patterns
     var escapeRegExp = function (str) {
@@ -64,22 +77,14 @@ module.exports = function (grunt) {
           var translationDefaultValue = "";
 
           switch (regexName) {
-            case 'HtmlDirectiveSimpleQuote':
-            case 'HtmlDirectiveDoubleQuote':
-              translationKey = r[1].trim();
-              translationDefaultValue = (r[2] || "").trim();
-              break;
             case 'HtmlDirectivePluralFirst':
-              if (!r.length > 2) {
-                return;
-              }
               var tmp = r[1];
               r[1] = r[2];
               r[2] = tmp;
             case 'HtmlDirectivePluralLast':
               evalString = eval(r[2]);
               if (_.isArray(evalString) && evalString.length >= 2) {
-                translationDefaultValue = "{NB, plural, one{" + evalString[0] + "} other{" + evalString[1] + "}" + (evalString[2] ? ' ' + evalString[2] : '') + "}";
+                translationDefaultValue = "{NB, plural, one{" + evalString[0] + "} other{" + evalString[1] + "}" + (evalString[2] ? ' ' + evalString[2] : '');
               }
               translationKey = r[1].trim();
               break;
@@ -95,6 +100,7 @@ module.exports = function (grunt) {
           switch (regexName) {
             case "commentSimpleQuote":
             case "HtmlFilterSimpleQuote":
+            case "SwiteHtmlFilterSimpleQuote":
             case "JavascriptServiceSimpleQuote":
             case "JavascriptServiceInstantSimpleQuote":
             case "JavascriptFilterSimpleQuote":
@@ -103,6 +109,7 @@ module.exports = function (grunt) {
               break;
             case "commentDoubleQuote":
             case "HtmlFilterDoubleQuote":
+            case "SwiteHtmlFilterDoubleQuote":
             case "JavascriptServiceDoubleQuote":
             case "JavascriptServiceInstantDoubleQuote":
             case "JavascriptFilterDoubleQuote":
@@ -122,41 +129,16 @@ module.exports = function (grunt) {
 
               key.forEach(function(item){
                 item = item.replace(/\\\"/g, '"').trim();
-                if (item !== '') {
-                  results[item] = translationDefaultValue;
-                }
+                results[item] = translationDefaultValue;
               });
               break;
           }
 
-          // Check for customRegex
-          if (_.isObject(customRegex) && !_.isArray(customRegex) && customRegex.hasOwnProperty(regexName)) {
-            if (_.isFunction(customRegex[regexName])) {
-              translationKey = customRegex[regexName](translationKey) || translationKey;
-            }
-          }
-
-          // Store the translationKey with the value into results
-          var defaultValueByTranslationKey = function (translationKey, translationDefaultValue) {
-            if (regexName !== "JavascriptServiceArraySimpleQuote" &&
+          if( regexName !== "JavascriptServiceArraySimpleQuote" &&
               regexName !== "JavascriptServiceArrayDoubleQuote") {
-              if (keyAsText === true && translationDefaultValue.length === 0) {
-                results[translationKey] = translationKey;
-              } else {
-                results[translationKey] = translationDefaultValue;
-              }
-            }
+            results[ translationKey ] = translationDefaultValue;
           }
 
-          // Ternary operation
-          var ternaryKeys = _extractTernaryKey(translationKey)
-          if (ternaryKeys) {
-            _.forEach(ternaryKeys, function(v) {
-              defaultValueByTranslationKey(v);
-            });
-          } else {
-            defaultValueByTranslationKey(translationKey, translationDefaultValue);
-          }
 
         }
       }
@@ -166,16 +148,16 @@ module.exports = function (grunt) {
     var regexs = {
       commentSimpleQuote: '\\/\\*\\s*i18nextract\\s*\\*\\/\'((?:\\\\.|[^\'\\\\])*)\'',
       commentDoubleQuote: '\\/\\*\\s*i18nextract\\s*\\*\\/"((?:\\\\.|[^"\\\\])*)"',
-      HtmlFilterSimpleQuote: escapeRegExp(interpolation.startDelimiter) + '\\s*(?:::)?\'((?:\\\\.|[^\'\\\\])*)\'\\s*\\|\\s*translate(:.*?)?\\s*' + escapeRegExp(interpolation.endDelimiter),
-      HtmlFilterDoubleQuote: escapeRegExp(interpolation.startDelimiter) + '\\s*(?:::)?"((?:\\\\.|[^"\\\\\])*)"\\s*\\|\\s*translate(:.*?)?\\s*' + escapeRegExp(interpolation.endDelimiter),
-      HtmlFilterTernary: escapeRegExp(interpolation.startDelimiter) + '\\s*(?:::)?([^?]*\\?[^:]*:[^|}]*)\\s*\\|\\s*translate(:.*?)?\\s*' + escapeRegExp(interpolation.endDelimiter),
-      HtmlDirective: '<(?:[^>"]|"(?:[^"]|\\/")*")*\\stranslate(?:>|\\s[^>]*>)([^<]*)',
-      HtmlDirectiveSimpleQuote: '<(?:[^>"]|"(?:[^"]|\\/")*")*\\stranslate=\'([^\']*)\'[^>]*>([^<]*)',
-      HtmlDirectiveDoubleQuote: '<(?:[^>"]|"(?:[^"]|\\/")*")*\\stranslate="([^"]*)"[^>]*>([^<]*)',
+      HtmlFilterSimpleQuote: escapeRegExp(interpolation.startDelimiter) + '\\s*\'((?:\\\\.|[^\'\\\\])*)\'\\s*\\|\\s*translate(:.*?)?\\s*' + escapeRegExp(interpolation.endDelimiter),
+      SwiteHtmlFilterSimpleQuote: escapeRegExp(interpolation.startDelimiter) + '\\s*\'((?:\\\\.|[^\'\\\\])*)\'\\s*\\|\\s*pageTranslate(:.*?)?\\s*' + escapeRegExp(interpolation.endDelimiter),
+      HtmlFilterDoubleQuote: escapeRegExp(interpolation.startDelimiter) + '\\s*"((?:\\\\.|[^"\\\\\])*)"\\s*\\|\\s*translate(:.*?)?\\s*' + escapeRegExp(interpolation.endDelimiter),
+      SwiteHtmlFilterDoubleQuote: escapeRegExp(interpolation.startDelimiter) + '\\s*"((?:\\\\.|[^"\\\\\])*)"\\s*\\|\\s*pageTranslate(:.*?)?\\s*' + escapeRegExp(interpolation.endDelimiter),
+      HtmlDirective: '<[^>]*translate[^{>]*>([^<]*)<\/[^>]*>',
+      SwiteHtmlDirective: '<[^>]*page-translate[^{>]*>([^<]*)<\/[^>]*>',
+      HtmlDirectiveStandalone: 'translate="((?:\\\\.|[^"\\\\])*)"',
       HtmlDirectivePluralLast: 'translate="((?:\\\\.|[^"\\\\])*)".*angular-plural-extract="((?:\\\\.|[^"\\\\])*)"',
       HtmlDirectivePluralFirst: 'angular-plural-extract="((?:\\\\.|[^"\\\\])*)".*translate="((?:\\\\.|[^"\\\\])*)"',
       HtmlNgBindHtml: 'ng-bind-html="\\s*\'((?:\\\\.|[^\'\\\\])*)\'\\s*\\|\\s*translate(:.*?)?\\s*"',
-      HtmlNgBindHtmlTernary: 'ng-bind-html="\\s*([^?]*?[^:]*:[^|}]*)\\s*\\|\\s*translate(:.*?)?\\s*"',
       JavascriptServiceSimpleQuote: '\\$translate\\(\\s*\'((?:\\\\.|[^\'\\\\])*)\'[^\\)]*\\)',
       JavascriptServiceDoubleQuote: '\\$translate\\(\\s*"((?:\\\\.|[^"\\\\])*)"[^\\)]*\\)',
       JavascriptServiceArraySimpleQuote: '\\$translate\\((?:\\s*(\\[\\s*(?:(?:\'(?:(?:\\.|[^.*\'\\\\])*)\')\\s*,*\\s*)+\\s*\\])\\s*)\\)',
@@ -187,30 +169,9 @@ module.exports = function (grunt) {
     };
 
     _.forEach(customRegex, function (regex, key) {
-      if (_.isObject(customRegex) && !_.isArray(customRegex)) {
-        regexs[key] = key;
-      } else {
-        regexs['others_' + key] = regex;
-      }
+      regexs['others_' + key] = regex;
     });
 
-
-    var _extractTernaryKey = function (key) {
-      var delimiterRegexp = new RegExp('(' + escapeRegExp(interpolation.startDelimiter) + ')|(' + escapeRegExp(interpolation.endDelimiter) + ')', 'g')
-      var ternarySimpleQuoteRegexp = new RegExp('([^?]*)\\?(?:\\s*\'((?:\\\\.|[^\'\\\\])*)\'\\s*):\\s*\'((?:\\\\.|[^\'\\\\])*)\'\\s*')
-      var ternaryDoubleQuoteRegexp = new RegExp('([^?]*)\\?(?:\\s*"((?:\\\\.|[^"\\\\])*)"\\s*):\\s*"((?:\\\\.|[^"\\\\])*)"\\s*')
-
-      var cleanKey = key.replace(delimiterRegexp, '');
-      var match = cleanKey.match(ternaryDoubleQuoteRegexp);
-      if (!match) {
-        match = cleanKey.match(ternarySimpleQuoteRegexp);
-      }
-
-      if (match && match.length > 3) {
-        return [match[2], match[3]]
-      }
-      return null
-    };
 
     /**
      * Recurse an object to retrieve as an array all the value of named parameters
@@ -284,8 +245,10 @@ module.exports = function (grunt) {
         switch (i) {
           // Case filter HTML simple/double quoted
           case "HtmlFilterSimpleQuote":
+          case "SwiteHtmlFilterSimpleQuote":
           case "HtmlFilterDoubleQuote":
           case "HtmlDirective":
+          case "SwiteHtmlDirective":
           case "HtmlDirectivePluralLast":
           case "HtmlDirectivePluralFirst":
           case "JavascriptFilterSimpleQuote":
@@ -330,30 +293,51 @@ module.exports = function (grunt) {
       "nullEmpty": nullEmpty
     }, results);
 
-    // Prepare some params to pass to the adapter
-    var params = {
-      lang: this.data.lang,
-      dest: dest,
-      prefix: prefix,
-      suffix: suffix,
-      source: this.data.source,
-      defaultLang: this.data.defaultLang,
-      stringifyOptions: this.data.stringifyOptions
-    };
+    // Build all output langage files
+    this.data.lang.forEach(function (lang) {
 
-    switch(adapter) {
-      case 'pot':
-        var PotAdapter = require('./lib/pot-adapter.js');
-        var toPot = new PotAdapter(grunt);
-        toPot.init(params);
-        _translation.persist(toPot);
-        break;
-      default:
-        var JsonAdapter = require('./lib/json-adapter.js');
-        var toJson = new JsonAdapter(grunt);
-        toJson.init(params);
-        _translation.persist(toJson);
-    };
+      var destFilename = dest + '/' + prefix + lang + suffix,
+        filename = source,
+        translations = {},
+        json = {};
+
+      // Test source filename
+      if (filename === '' || !_file.exists(filename)) {
+        filename = destFilename;
+      }
+
+      _log.subhead('Process ' + lang + ' : ' + filename);
+
+      var isDefaultLang = (defaultLang === lang);
+      if (!_file.exists(filename)) {
+        _log.debug('File doesn\'t exist');
+
+        _log.writeln('Create file: ' + destFilename + (isDefaultLang ? ' (' + lang + ' is the default language)' : ''));
+        translations = _translation.getMergedTranslations({}, isDefaultLang);
+
+      } else {
+        _log.debug('File exist');
+        json = _file.readJSON(filename);
+        translations = _translation.getMergedTranslations(Translations.flatten(json), isDefaultLang);
+      }
+
+      var stats = _translation.getStats();
+      var statEmptyType = nullEmpty ? "null" : "empty";
+      var statPercentage =  Math.round(stats[statEmptyType] / stats["total"] * 100);
+      statPercentage = isNaN(statPercentage) ? 100 : statPercentage;
+      var statsString = "Statistics : " +
+        statEmptyType + ": " + stats[statEmptyType] + " (" + statPercentage + "%)" +
+        " / Updated: " + stats["updated"] +
+        " / Deleted: " + stats["deleted"] +
+        " / New: " + stats["new"];
+
+      _log.writeln(statsString);
+
+      // Write JSON file for lang
+      _file.write(destFilename, customStringify(translations));
+
+    });
 
   });
+
 };
